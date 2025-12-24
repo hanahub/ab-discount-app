@@ -1,0 +1,23 @@
+query CartInput {
+  cart {
+    lines {
+      id
+      merchandise {
+        ... on ProductVariant {
+          id
+          product {
+            id
+          }
+        }
+      }
+      cost {
+        subtotalAmount {
+          amount
+        }
+      }
+    }
+  }
+  discount {
+    discountClasses
+  }
+}
