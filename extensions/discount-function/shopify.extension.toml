@@ -20,3 +20,10 @@ description = "t:description"
   [extensions.build]
   command = ""
   path = "dist/function.wasm"
+
+  [extensions.input.variables]
+  namespace = "$app:example-discounts--ui-extension"
+  key = "function-configuration"
+
+  [extensions.ui]
+  handle = "discount-ui"

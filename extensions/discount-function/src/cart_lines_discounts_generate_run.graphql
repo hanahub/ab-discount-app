@@ -1,23 +1,29 @@
-query CartInput {
+query CartInput($collectionIds: [ID!]) {
   cart {
     lines {
       id
-      merchandise {
-        ... on ProductVariant {
-          id
-          product {
-            id
-          }
-        }
-      }
       cost {
         subtotalAmount {
           amount
+        }
+      }
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          product {
+            inAnyCollection(ids: $collectionIds)
+          }
         }
       }
     }
   }
   discount {
     discountClasses
+    metafield(
+      namespace: "$app:example-discounts--ui-extension"
+      key: "function-configuration"
+    ) {
+      value
+    }
   }
 }

@@ -3,56 +3,54 @@ import {
   DiscountClass,
 } from "../generated/api";
 
-/**
-  * @typedef {import("../generated/api").DeliveryInput} RunInput
-  * @typedef {import("../generated/api").CartDeliveryOptionsDiscountsGenerateRunResult} CartDeliveryOptionsDiscountsGenerateRunResult
-  */
-
-/**
-  * @param {RunInput} input
-  * @returns {CartDeliveryOptionsDiscountsGenerateRunResult}
-  */
-
 export function cartDeliveryOptionsDiscountsGenerateRun(input) {
-  console.log("cart_delivery_options_discounts_generate_run================");
-
   const firstDeliveryGroup = input.cart.deliveryGroups[0];
   if (!firstDeliveryGroup) {
-    return {operations: []};
+    throw new Error("No delivery groups found");
   }
 
+  const { deliveryPercentage } = parseMetafield(input.discount.metafield);
   const hasShippingDiscountClass = input.discount.discountClasses.includes(
     DiscountClass.Shipping,
   );
-
   if (!hasShippingDiscountClass) {
-    return {operations: []};
+    return { operations: [] };
   }
 
-  return {
-    operations: [
-      {
-        deliveryDiscountsAdd: {
-          candidates: [
-            {
-              message: "FREE DELIVERY",
-              targets: [
-                {
-                  deliveryGroup: {
-                    id: firstDeliveryGroup.id,
-                  },
-                },
-              ],
-              value: {
-                percentage: {
-                  value: 100,
+  const operations = [];
+  if (hasShippingDiscountClass && deliveryPercentage > 0) {
+    operations.push({
+      deliveryDiscountsAdd: {
+        candidates: [
+          {
+            message: `${deliveryPercentage}% OFF DELIVERY`,
+            targets: [
+              {
+                deliveryGroup: {
+                  id: firstDeliveryGroup.id,
                 },
               },
+            ],
+            value: {
+              percentage: {
+                value: deliveryPercentage,
+              },
             },
-          ],
-          selectionStrategy: DeliveryDiscountSelectionStrategy.All,
-        },
+          },
+        ],
+        selectionStrategy: DeliveryDiscountSelectionStrategy.All,
       },
-    ],
-  };
+    });
+  }
+  return { operations };
+}
+
+function parseMetafield(metafield) {
+  try {
+    const value = JSON.parse(metafield.value);
+    return { deliveryPercentage: value.deliveryPercentage || 0 };
+  } catch (error) {
+    console.error("Error parsing metafield", error);
+    return { deliveryPercentage: 0 };
+  }
 }

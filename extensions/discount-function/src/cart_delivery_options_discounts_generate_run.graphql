@@ -6,5 +6,11 @@ query DeliveryInput {
   }
   discount {
     discountClasses
+    metafield(
+      namespace: "$app:example-discounts--ui-extension"
+      key: "function-configuration"
+    ) {
+      value
+    }
   }
 }
