@@ -22,7 +22,7 @@ description = "t:description"
   path = "dist/function.wasm"
 
   [extensions.input.variables]
-  namespace = "$app:example-discounts--ui-extension"
+  namespace = "$app:smart-variant-discounts"
   key = "function-configuration"
 
 

@@ -32,31 +32,39 @@ export function cartLinesDiscountsGenerateRun(input) {
     }
   });
 
-  // Create operations for each percentage group
+  const candidates = [];
+
+  // Create candidates for each percentage group
   for (const [percentage, lineIds] of linesByPercentage.entries()) {
-    operations.push({
-      productDiscountsAdd: {
-        candidates: [
-          {
-            message: `${percentage}% OFF`,
-            targets: lineIds.map((id) => ({
-              cartLine: {
-                id: id,
-              },
-            })),
-            value: {
-              percentage: {
-                value: percentage,
-              },
-            },
-          },
-        ],
-        selectionStrategy: ProductDiscountSelectionStrategy.First,
+    candidates.push({
+      message: `${percentage}% OFF`,
+      targets: lineIds.map((id) => ({
+        cartLine: {
+          id: id,
+        },
+      })),
+      value: {
+        percentage: {
+          value: percentage,
+        },
       },
     });
   }
 
-  return { operations };
+  if (candidates.length === 0) {
+    return { operations: [] };
+  }
+
+  return {
+    operations: [
+      {
+        productDiscountsAdd: {
+          candidates,
+          selectionStrategy: ProductDiscountSelectionStrategy.All,
+        },
+      },
+    ],
+  };
 }
 
 function parseMetafield(metafield) {

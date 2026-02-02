@@ -1,5 +1,5 @@
 {
-  "name": "discount-app",
+  "name": "smart-discount",
   "private": true,
   "scripts": {
     "build": "react-router build",

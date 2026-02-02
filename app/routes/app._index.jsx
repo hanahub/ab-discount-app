@@ -90,10 +90,10 @@ export const loader = async ({ request }) => {
 
   // Parse existing config
   let existingConfig = {};
-  let variantToDiscountMap = {};
+  let mainDiscountId = null;
+  let mainMetafieldId = null;
 
   const myFunctions = functionsJson.data?.shopifyFunctions?.nodes || [];
-  // Enhanced search for the function
   const myFunction = myFunctions.find((f) =>
     f.title === "discount-function" ||
     f.apiType === "cart_lines_discounts" ||
@@ -101,72 +101,52 @@ export const loader = async ({ request }) => {
   );
   const functionId = myFunction?.id;
 
-  console.log("DEBUG: Target functionId:", functionId);
-
-  // Log all discount types found
-  const allDiscounts = discountsJson.data?.discountNodes?.nodes || [];
-  allDiscounts.forEach((n) => {
-    console.log(`DEBUG: Found Discount Node ${n.id}, Type: ${n.discount?.__typename}, Title: ${n.discount?.title}`);
-  });
-
   if (functionId) {
     const uuid = functionId.split("/").pop();
+    const allDiscounts = discountsJson.data?.discountNodes?.nodes || [];
 
-    // Find all discounts for this function (UUID or GID)
-    let ourDiscounts = (discountsJson.data?.discountNodes?.nodes || []).filter((node) => {
+    let ourDiscounts = allDiscounts.filter((node) => {
       const nodeFuncId = node.discount.appDiscountType?.functionId;
-      const isMatch = nodeFuncId === uuid || nodeFuncId === functionId || (nodeFuncId && uuid && nodeFuncId.includes(uuid));
-      return isMatch;
+      return nodeFuncId === uuid || nodeFuncId === functionId || (nodeFuncId && uuid && nodeFuncId.includes(uuid));
     });
 
-    // Fallback: If no functionId match, look for discounts we created by Title
     if (ourDiscounts.length === 0) {
-      console.log("DEBUG: No functionId match. Checking Title fallback...");
-      ourDiscounts = (discountsJson.data?.discountNodes?.nodes || []).filter((node) => {
+      ourDiscounts = allDiscounts.filter((node) => {
         const title = node.discount?.title || "";
-        return title.startsWith("Discount:") || title.startsWith("Automatic Variant Discounts");
+        return title === "Automatic Variant Discounts" || title.startsWith("Discount:");
       });
     }
 
-    console.log("DEBUG: Final matching discounts count:", ourDiscounts.length);
-
     if (ourDiscounts.length > 0) {
+      // Prefer the consolidated node if it exists
+      const mainNode = ourDiscounts.find(n => n.discount.title === "Automatic Variant Discounts") || ourDiscounts[0];
+      mainDiscountId = mainNode.id;
+
+      // Extract config from ALL existing nodes to ensure we don't lose data during migration
       ourDiscounts.forEach((node) => {
         const metafields = node.metafields?.nodes || [];
-
         metafields.forEach((m) => {
           if (m.key === "function-configuration") {
+            if (node.id === mainDiscountId) mainMetafieldId = m.id;
             try {
               const parsed = JSON.parse(m.value);
               const vDiscounts = parsed.variantDiscounts || {};
-
-              // Map each variant to this specific discount node
-              Object.keys(vDiscounts).forEach((vId) => {
-                existingConfig = { ...existingConfig, [vId]: vDiscounts[vId] };
-                variantToDiscountMap[vId] = {
-                  discountId: node.id,
-                  metafieldId: m.id,
-                };
-              });
+              Object.assign(existingConfig, vDiscounts);
             } catch (e) {
-              console.error("Failed to parse existing config", e);
+              console.error("Failed to parse config", e);
             }
           }
         });
       });
-    } else {
-      console.log("DEBUG: No matching discounts found for functionId:", functionId, "UUID:", uuid);
     }
   }
-
-  console.log("DEBUG: Final Merged Config Count:", Object.keys(existingConfig).length);
-  console.log("DEBUG: Final variantToDiscountMap Count:", Object.keys(variantToDiscountMap).length);
 
   return {
     products: productsJson.data?.products?.edges || [],
     functionId,
     existingConfig,
-    variantToDiscountMap,
+    mainDiscountId,
+    mainMetafieldId,
   };
 };
 
@@ -176,134 +156,90 @@ export const action = async ({ request }) => {
 
   const variantDiscountsStr = formData.get("variantDiscounts");
   const functionId = formData.get("functionId");
-  const variantToDiscountMapStr = formData.get("variantToDiscountMap");
-  const skuMapStr = formData.get("skuMap");
-  const titleMapStr = formData.get("titleMap");
+  const mainDiscountId = formData.get("mainDiscountId");
+  const mainMetafieldId = formData.get("mainMetafieldId");
 
   const variantDiscounts = JSON.parse(variantDiscountsStr);
-  const variantToDiscountMap = JSON.parse(variantToDiscountMapStr);
-  const skuMap = JSON.parse(skuMapStr);
-  const titleMap = JSON.parse(titleMapStr);
-
   const errors = [];
 
-  // Iterate over each variant and either create, update or delete its own discount node
-  for (const variantId of Object.keys(variantDiscounts)) {
-    const percentageInput = variantDiscounts[variantId];
-    const percentage = percentageInput === "" ? 0 : parseFloat(percentageInput);
-    const existing = variantToDiscountMap[variantId];
+  // Consolidate all non-zero discounts
+  const activeDiscounts = {};
+  Object.keys(variantDiscounts).forEach(vId => {
+    const val = parseFloat(variantDiscounts[vId]);
+    if (val > 0) activeDiscounts[vId] = val;
+  });
 
-    // Prepare metafield for this variant
-    const metafieldValue = JSON.stringify({ variantDiscounts: { [variantId]: percentage } });
-    const metafield = {
-      value: metafieldValue,
-      type: "json",
-    };
+  const metafieldValue = JSON.stringify({ variantDiscounts: activeDiscounts });
+  const metafield = {
+    namespace: "$app:smart-variant-discounts",
+    key: "function-configuration",
+    value: metafieldValue,
+    type: "json",
+  };
+  if (mainMetafieldId && mainMetafieldId !== "null") {
+    metafield.id = mainMetafieldId;
+  }
 
-    if (existing?.metafieldId) {
-      metafield.id = existing.metafieldId;
-    } else {
-      metafield.namespace = "$app:example-discounts--ui-extension";
-      metafield.key = "function-configuration";
-    }
-
-    try {
-      if (percentage > 0) {
-        if (existing?.discountId) {
-          // Update existing node
-          const response = await admin.graphql(
-            `#graphql
-              mutation discountAutomaticAppUpdate($id: ID!, $automaticAppDiscount: DiscountAutomaticAppInput!) {
-                discountAutomaticAppUpdate(id: $id, automaticAppDiscount: $automaticAppDiscount) {
-                  userErrors {
-                    field
-                    message
-                  }
-                }
-              }`,
-            {
-              variables: {
-                id: existing.discountId,
-                automaticAppDiscount: {
-                  discountClasses: ["PRODUCT"],
-                  metafields: [metafield],
-                },
-              },
+  try {
+    if (mainDiscountId && mainDiscountId !== "null") {
+      // Update existing consolidated node
+      const response = await admin.graphql(
+        `#graphql
+          mutation discountAutomaticAppUpdate($id: ID!, $automaticAppDiscount: DiscountAutomaticAppInput!) {
+            discountAutomaticAppUpdate(id: $id, automaticAppDiscount: $automaticAppDiscount) {
+              userErrors { field message }
             }
-          );
-          const json = await response.json();
-          if (json.data?.discountAutomaticAppUpdate?.userErrors?.length > 0) {
-            errors.push(...json.data.discountAutomaticAppUpdate.userErrors);
-          }
-        } else {
-          // Create new node
-          const timestamp = new Date().getTime().toString().slice(-4);
-          const sku = skuMap[variantId] || "VAR";
-          const vTitle = titleMap[variantId] || "";
-          const uniqueTitle = `Discount: ${sku} - ${vTitle} (${timestamp})`;
-
-          const response = await admin.graphql(
-            `#graphql
-              mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
-                discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
-                  userErrors {
-                    field
-                    message
-                  }
-                }
-              }`,
-            {
-              variables: {
-                automaticAppDiscount: {
-                  title: uniqueTitle,
-                  functionId: functionId,
-                  startsAt: new Date().toISOString(),
-                  discountClasses: ["PRODUCT"],
-                  metafields: [metafield],
-                },
-              },
-            }
-          );
-          const json = await response.json();
-          if (json.data?.discountAutomaticAppCreate?.userErrors?.length > 0) {
-            errors.push(...json.data.discountAutomaticAppCreate.userErrors);
-          }
+          }`,
+        {
+          variables: {
+            id: mainDiscountId,
+            automaticAppDiscount: {
+              discountClasses: ["PRODUCT"],
+              metafields: [metafield],
+            },
+          },
         }
-      } else if (existing?.discountId) {
-        // Delete existing node if percentage is 0 and it exists
-        const response = await admin.graphql(
-          `#graphql
-            mutation discountAutomaticDelete($id: ID!) {
-              discountAutomaticDelete(id: $id) {
-                userErrors {
-                  field
-                  message
-                }
-              }
-            }`,
-          {
-            variables: { id: existing.discountId },
-          }
-        );
-        const json = await response.json();
-        if (json.data?.discountAutomaticDelete?.userErrors?.length > 0) {
-          errors.push(...json.data.discountAutomaticDelete.userErrors);
-        }
+      );
+      const json = await response.json();
+      if (json.data?.discountAutomaticAppUpdate?.userErrors?.length > 0) {
+        errors.push(...json.data.discountAutomaticAppUpdate.userErrors);
       }
-    } catch (error) {
-      errors.push({ message: error.message });
+    } else if (Object.keys(activeDiscounts).length > 0) {
+      // Create new consolidated node
+      const response = await admin.graphql(
+        `#graphql
+          mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
+            discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
+              userErrors { field message }
+            }
+          }`,
+        {
+          variables: {
+            automaticAppDiscount: {
+              title: "[Smart Discount] Automatic Subscription Discounts",
+              functionId: functionId,
+              startsAt: new Date().toISOString(),
+              discountClasses: ["PRODUCT"],
+              metafields: [metafield],
+            },
+          },
+        }
+      );
+      const json = await response.json();
+      if (json.data?.discountAutomaticAppCreate?.userErrors?.length > 0) {
+        errors.push(...json.data.discountAutomaticAppCreate.userErrors);
+      }
     }
+  } catch (error) {
+    errors.push({ message: error.message });
   }
 
-  if (errors.length > 0) {
-    return { status: "error", errors };
-  }
-
+  if (errors.length > 0) return { status: "error", errors };
   return { status: "success" };
 };
 
 export default function Discounts() {
-  const { products, existingConfig, functionId, variantToDiscountMap } = useLoaderData();
+  const { products, existingConfig, functionId, mainDiscountId, mainMetafieldId } = useLoaderData();
   const actionData = useActionData();
   const submit = useSubmit();
   const navigation = useNavigation();
@@ -341,16 +277,8 @@ export default function Discounts() {
     const formData = new FormData();
     formData.append("variantDiscounts", JSON.stringify(discounts));
     formData.append("functionId", functionId);
-    formData.append("variantToDiscountMap", JSON.stringify(variantToDiscountMap));
-
-    const skuMap = {};
-    const titleMap = {};
-    rows.forEach(r => {
-      skuMap[r.id] = r.sku;
-      titleMap[r.id] = r.variantTitle;
-    });
-    formData.append("skuMap", JSON.stringify(skuMap));
-    formData.append("titleMap", JSON.stringify(titleMap));
+    formData.append("mainDiscountId", mainDiscountId);
+    formData.append("mainMetafieldId", mainMetafieldId);
 
     submit(formData, { method: "post" });
   };

@@ -21,7 +21,7 @@ query CartInput($collectionIds: [ID!]) {
   discount {
     discountClasses
     metafield(
-      namespace: "$app:example-discounts--ui-extension"
+      namespace: "$app:smart-variant-discounts"
       key: "function-configuration"
     ) {
       value
