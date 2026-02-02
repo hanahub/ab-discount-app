@@ -247,13 +247,18 @@ export default function Discounts() {
 
   const [discounts, setDiscounts] = useState(existingConfig || {});
   const [isHydrated, setIsHydrated] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
+  const [banner, setBanner] = useState(null);
 
-  // Show success for 5 seconds when action succeeds
+  // Show banner when action succeeds or fails
   useEffect(() => {
     if (actionData?.status === "success") {
-      setShowSuccess(true);
-      const timer = setTimeout(() => setShowSuccess(false), 5000);
+      setBanner({ type: "success" });
+      const timer = setTimeout(() => setBanner(null), 5000);
+      return () => clearTimeout(timer);
+    }
+    if (actionData?.status === "error") {
+      setBanner({ type: "error" });
+      const timer = setTimeout(() => setBanner(null), 10000); // Errors stay longer
       return () => clearTimeout(timer);
     }
   }, [actionData]);
@@ -315,9 +320,20 @@ export default function Discounts() {
 
   return (
     <s-page heading="Automatic Discounts">
-      {showSuccess && (
+      {banner?.type === "success" && (
         <div className="banner-success">
           Discounts updated successfully!
+        </div>
+      )}
+      {banner?.type === "error" && (
+        <div className="banner-error">
+          <div className="stack-block gap-small">
+            Error saving discounts:
+            {actionData?.errors?.map((e, i) => (
+              <div key={i}>{e.message}</div>
+            ))}
+            {actionData?.message && <div>{actionData.message}</div>}
+          </div>
         </div>
       )}
       <s-button slot="primary-action" onClick={handleSave} loading={isLoading}>
@@ -325,18 +341,6 @@ export default function Discounts() {
       </s-button>
 
       <s-section>
-        {actionData?.status === "error" && (
-          <div className="banner-error">
-            <div className="stack-block gap-small">
-              Error saving discounts:
-              {actionData.errors?.map((e, i) => (
-                <div key={i}>{e.message}</div>
-              ))}
-              {actionData.message && <div>{actionData.message}</div>}
-            </div>
-          </div>
-        )}
-
         <div className="discount-table-container">
           <div className="stack-block">
             {/* Table Header */}
