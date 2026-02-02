@@ -311,6 +311,16 @@ export default function Discounts() {
 
   const [discounts, setDiscounts] = useState(existingConfig || {});
   const [isHydrated, setIsHydrated] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+
+  // Show success for 5 seconds when action succeeds
+  useEffect(() => {
+    if (actionData?.status === "success") {
+      setShowSuccess(true);
+      const timer = setTimeout(() => setShowSuccess(false), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [actionData]);
 
   // Sync state when loader data changes (after refresh/action)
   useEffect(() => {
@@ -377,43 +387,44 @@ export default function Discounts() {
 
   return (
     <s-page heading="Automatic Discounts">
+      {showSuccess && (
+        <div className="banner-success">
+          Discounts updated successfully!
+        </div>
+      )}
       <s-button slot="primary-action" onClick={handleSave} loading={isLoading}>
         Save Discounts
       </s-button>
 
       <s-section>
-        {actionData?.status === "success" && (
-          <div className="banner-success">
-            <s-text>Discounts updated successfully!</s-text>
-          </div>
-        )}
         {actionData?.status === "error" && (
           <div className="banner-error">
             <div className="stack-block gap-small">
-              <s-text>Error saving discounts:</s-text>
+              Error saving discounts:
               {actionData.errors?.map((e, i) => (
-                <s-text key={i}>{e.message}</s-text>
+                <div key={i}>{e.message}</div>
               ))}
-              {actionData.message && <s-text>{actionData.message}</s-text>}
+              {actionData.message && <div>{actionData.message}</div>}
             </div>
           </div>
         )}
 
         <div className="discount-table-container">
-          <div className="stack-block gap-base">
+          <div className="stack-block">
             {/* Table Header */}
-            <div className="p-small border-bottom">
+            <div className="p-base border-bottom">
               <div className="flex-center gap-base">
-                <div className="col-product table-header-text"><s-text>Product</s-text></div>
-                <div className="col-variant table-header-text"><s-text>Variant</s-text></div>
-                <div className="col-price table-header-text"><s-text>Price</s-text></div>
-                <div className="col-discount table-header-text"><s-text>Discount (%)</s-text></div>
+                <div className="col-product table-header-text">Product</div>
+                <div className="col-variant table-header-text">Variant</div>
+                <div className="col-sku table-header-text">SKU</div>
+                <div className="col-price table-header-text">Price</div>
+                <div className="col-discount table-header-text">Discount (%)</div>
               </div>
             </div>
 
             {/* Table Rows */}
             {rows.map((row) => (
-              <div key={row.id} className="p-small border-bottom">
+              <div key={row.id} className="p-base border-bottom">
                 <div className="flex-center gap-base">
                   <div className="col-product">
                     <div className="flex-center gap-small">
@@ -424,11 +435,14 @@ export default function Discounts() {
                           className="product-variant-image"
                         />
                       )}
-                      <s-text>{row.productTitle}</s-text>
+                      {row.productTitle}
                     </div>
                   </div>
-                  <div className="col-variant"><s-text>{row.variantTitle}</s-text></div>
-                  <div className="col-price"><s-text>{row.price}</s-text></div>
+                  <div className="col-variant">{row.variantTitle}</div>
+                  <div className="col-sku">{row.sku}</div>
+                  <div className="col-price">
+                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(parseFloat(row.price))}
+                  </div>
                   <div className="col-discount">
                     <s-text-field
                       value={row.discount.toString()}
@@ -441,7 +455,7 @@ export default function Discounts() {
 
             {rows.length === 0 && (
               <div className="p-base text-center">
-                <s-text>No products found.</s-text>
+                No products found.
               </div>
             )}
           </div>
