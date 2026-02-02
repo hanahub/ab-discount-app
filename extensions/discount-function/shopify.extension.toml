@@ -25,5 +25,4 @@ description = "t:description"
   namespace = "$app:example-discounts--ui-extension"
   key = "function-configuration"
 
-  [extensions.ui]
-  handle = "discount-ui"
+

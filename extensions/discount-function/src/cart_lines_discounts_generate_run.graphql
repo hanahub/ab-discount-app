@@ -10,6 +10,7 @@ query CartInput($collectionIds: [ID!]) {
       merchandise {
         __typename
         ... on ProductVariant {
+          id
           product {
             inAnyCollection(ids: $collectionIds)
           }

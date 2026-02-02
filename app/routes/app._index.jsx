@@ -1,243 +1,452 @@
-import { useEffect } from "react";
-import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { boundary } from "@shopify/shopify-app-react-router/server";
+import { useLoaderData, useSubmit, useActionData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
+import { useState, useCallback, useEffect } from "react";
+import "../styles/index.css";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
-
-  return null;
-};
-
-export const action = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
+
+  // Fetch Products and Variants
+  const productsQuery = `
+    query {
+      products(first: 250) {
+        edges {
+          node {
             id
             title
-            handle
-            status
-            variants(first: 10) {
+            featuredImage {
+              url
+            }
+            variants(first: 20) {
               edges {
                 node {
                   id
+                  title
                   price
-                  barcode
-                  createdAt
+                  sku
                 }
               }
             }
           }
         }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-        },
-      },
-    },
-  );
-  const responseJson = await response.json();
-  const product = responseJson.data.productCreate.product;
-  const variantId = product.variants.edges[0].node.id;
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyReactRouterTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
+      }
+    }
+  `;
+
+  // Fetch Existing Discount Function to get ID
+  const functionsQuery = `
+    query {
+      shopifyFunctions(first: 25) {
+        nodes {
           id
-          price
-          barcode
-          createdAt
+          title
+          apiType
         }
       }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
+    }
+  `;
+
+  // Fetch Existing Automatic Discount Config (Broad query to find what's missing)
+  const discountsQuery = `
+    query {
+      discountNodes(first: 50) {
+        nodes {
+          id
+          metafields(first: 10) {
+            nodes {
+              id
+              namespace
+              key
+              value
+            }
+          }
+          discount {
+            __typename
+            ... on DiscountAutomaticApp {
+              title
+              status
+              appDiscountType {
+                functionId
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const [productsResult, functionsResult, discountsResult] = await Promise.all([
+    admin.graphql(productsQuery),
+    admin.graphql(functionsQuery),
+    admin.graphql(discountsQuery),
+  ]);
+
+  const productsJson = await productsResult.json();
+  const functionsJson = await functionsResult.json();
+  const discountsJson = await discountsResult.json();
+
+  console.log("DEBUG: Functions Found:", JSON.stringify(functionsJson.data?.shopifyFunctions?.nodes));
+  console.log("DEBUG: Discounts Found Rows:", discountsJson.data?.discountNodes?.nodes?.length);
+
+  // Parse existing config
+  let existingConfig = {};
+  let variantToDiscountMap = {};
+
+  const myFunctions = functionsJson.data?.shopifyFunctions?.nodes || [];
+  // Enhanced search for the function
+  const myFunction = myFunctions.find((f) =>
+    f.title === "discount-function" ||
+    f.apiType === "cart_lines_discounts" ||
+    f.apiType?.includes("discount")
   );
-  const variantResponseJson = await variantResponse.json();
+  const functionId = myFunction?.id;
+
+  console.log("DEBUG: Target functionId:", functionId);
+
+  // Log all discount types found
+  const allDiscounts = discountsJson.data?.discountNodes?.nodes || [];
+  allDiscounts.forEach((n) => {
+    console.log(`DEBUG: Found Discount Node ${n.id}, Type: ${n.discount?.__typename}, Title: ${n.discount?.title}`);
+  });
+
+  if (functionId) {
+    const uuid = functionId.split("/").pop();
+
+    // Find all discounts for this function (UUID or GID)
+    let ourDiscounts = (discountsJson.data?.discountNodes?.nodes || []).filter((node) => {
+      const nodeFuncId = node.discount.appDiscountType?.functionId;
+      const isMatch = nodeFuncId === uuid || nodeFuncId === functionId || (nodeFuncId && uuid && nodeFuncId.includes(uuid));
+      return isMatch;
+    });
+
+    // Fallback: If no functionId match, look for discounts we created by Title
+    if (ourDiscounts.length === 0) {
+      console.log("DEBUG: No functionId match. Checking Title fallback...");
+      ourDiscounts = (discountsJson.data?.discountNodes?.nodes || []).filter((node) => {
+        const title = node.discount?.title || "";
+        return title.startsWith("Discount:") || title.startsWith("Automatic Variant Discounts");
+      });
+    }
+
+    console.log("DEBUG: Final matching discounts count:", ourDiscounts.length);
+
+    if (ourDiscounts.length > 0) {
+      ourDiscounts.forEach((node) => {
+        const metafields = node.metafields?.nodes || [];
+
+        metafields.forEach((m) => {
+          if (m.key === "function-configuration") {
+            try {
+              const parsed = JSON.parse(m.value);
+              const vDiscounts = parsed.variantDiscounts || {};
+
+              // Map each variant to this specific discount node
+              Object.keys(vDiscounts).forEach((vId) => {
+                existingConfig = { ...existingConfig, [vId]: vDiscounts[vId] };
+                variantToDiscountMap[vId] = {
+                  discountId: node.id,
+                  metafieldId: m.id,
+                };
+              });
+            } catch (e) {
+              console.error("Failed to parse existing config", e);
+            }
+          }
+        });
+      });
+    } else {
+      console.log("DEBUG: No matching discounts found for functionId:", functionId, "UUID:", uuid);
+    }
+  }
+
+  console.log("DEBUG: Final Merged Config Count:", Object.keys(existingConfig).length);
+  console.log("DEBUG: Final variantToDiscountMap Count:", Object.keys(variantToDiscountMap).length);
 
   return {
-    product: responseJson.data.productCreate.product,
-    variant: variantResponseJson.data.productVariantsBulkUpdate.productVariants,
+    products: productsJson.data?.products?.edges || [],
+    functionId,
+    existingConfig,
+    variantToDiscountMap,
   };
 };
 
-export default function Index() {
-  const fetcher = useFetcher();
-  const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+export const action = async ({ request }) => {
+  const { admin } = await authenticate.admin(request);
+  const formData = await request.formData();
 
-  useEffect(() => {
-    if (fetcher.data?.product?.id) {
-      shopify.toast.show("Product created");
+  const variantDiscountsStr = formData.get("variantDiscounts");
+  const functionId = formData.get("functionId");
+  const variantToDiscountMapStr = formData.get("variantToDiscountMap");
+  const skuMapStr = formData.get("skuMap");
+  const titleMapStr = formData.get("titleMap");
+
+  const variantDiscounts = JSON.parse(variantDiscountsStr);
+  const variantToDiscountMap = JSON.parse(variantToDiscountMapStr);
+  const skuMap = JSON.parse(skuMapStr);
+  const titleMap = JSON.parse(titleMapStr);
+
+  const errors = [];
+
+  // Iterate over each variant and either create, update or delete its own discount node
+  for (const variantId of Object.keys(variantDiscounts)) {
+    const percentageInput = variantDiscounts[variantId];
+    const percentage = percentageInput === "" ? 0 : parseFloat(percentageInput);
+    const existing = variantToDiscountMap[variantId];
+
+    // Prepare metafield for this variant
+    const metafieldValue = JSON.stringify({ variantDiscounts: { [variantId]: percentage } });
+    const metafield = {
+      value: metafieldValue,
+      type: "json",
+    };
+
+    if (existing?.metafieldId) {
+      metafield.id = existing.metafieldId;
+    } else {
+      metafield.namespace = "$app:example-discounts--ui-extension";
+      metafield.key = "function-configuration";
     }
-  }, [fetcher.data?.product?.id, shopify]);
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+
+    try {
+      if (percentage > 0) {
+        if (existing?.discountId) {
+          // Update existing node
+          const response = await admin.graphql(
+            `#graphql
+              mutation discountAutomaticAppUpdate($id: ID!, $automaticAppDiscount: DiscountAutomaticAppInput!) {
+                discountAutomaticAppUpdate(id: $id, automaticAppDiscount: $automaticAppDiscount) {
+                  userErrors {
+                    field
+                    message
+                  }
+                }
+              }`,
+            {
+              variables: {
+                id: existing.discountId,
+                automaticAppDiscount: {
+                  discountClasses: ["PRODUCT"],
+                  metafields: [metafield],
+                },
+              },
+            }
+          );
+          const json = await response.json();
+          if (json.data?.discountAutomaticAppUpdate?.userErrors?.length > 0) {
+            errors.push(...json.data.discountAutomaticAppUpdate.userErrors);
+          }
+        } else {
+          // Create new node
+          const timestamp = new Date().getTime().toString().slice(-4);
+          const sku = skuMap[variantId] || "VAR";
+          const vTitle = titleMap[variantId] || "";
+          const uniqueTitle = `Discount: ${sku} - ${vTitle} (${timestamp})`;
+
+          const response = await admin.graphql(
+            `#graphql
+              mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
+                discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
+                  userErrors {
+                    field
+                    message
+                  }
+                }
+              }`,
+            {
+              variables: {
+                automaticAppDiscount: {
+                  title: uniqueTitle,
+                  functionId: functionId,
+                  startsAt: new Date().toISOString(),
+                  discountClasses: ["PRODUCT"],
+                  metafields: [metafield],
+                },
+              },
+            }
+          );
+          const json = await response.json();
+          if (json.data?.discountAutomaticAppCreate?.userErrors?.length > 0) {
+            errors.push(...json.data.discountAutomaticAppCreate.userErrors);
+          }
+        }
+      } else if (existing?.discountId) {
+        // Delete existing node if percentage is 0 and it exists
+        const response = await admin.graphql(
+          `#graphql
+            mutation discountAutomaticDelete($id: ID!) {
+              discountAutomaticDelete(id: $id) {
+                userErrors {
+                  field
+                  message
+                }
+              }
+            }`,
+          {
+            variables: { id: existing.discountId },
+          }
+        );
+        const json = await response.json();
+        if (json.data?.discountAutomaticDelete?.userErrors?.length > 0) {
+          errors.push(...json.data.discountAutomaticDelete.userErrors);
+        }
+      }
+    } catch (error) {
+      errors.push({ message: error.message });
+    }
+  }
+
+  if (errors.length > 0) {
+    return { status: "error", errors };
+  }
+
+  return { status: "success" };
+};
+
+export default function Discounts() {
+  const { products, existingConfig, functionId, variantToDiscountMap } = useLoaderData();
+  const actionData = useActionData();
+  const submit = useSubmit();
+  const navigation = useNavigation();
+  const isLoading = navigation.state === "submitting" || navigation.state === "loading";
+
+  const [discounts, setDiscounts] = useState(existingConfig || {});
+  const [isHydrated, setIsHydrated] = useState(false);
+
+  // Sync state when loader data changes (after refresh/action)
+  useEffect(() => {
+    setIsHydrated(true);
+    if (existingConfig) {
+      setDiscounts(existingConfig);
+    }
+  }, [existingConfig]);
+
+  const handleDiscountChange = useCallback((variantId, value) => {
+    setDiscounts((prev) => ({
+      ...prev,
+      [variantId]: value === "" ? "" : parseFloat(value) || 0,
+    }));
+  }, []);
+
+  const handleSave = () => {
+    const formData = new FormData();
+    formData.append("variantDiscounts", JSON.stringify(discounts));
+    formData.append("functionId", functionId);
+    formData.append("variantToDiscountMap", JSON.stringify(variantToDiscountMap));
+
+    const skuMap = {};
+    const titleMap = {};
+    rows.forEach(r => {
+      skuMap[r.id] = r.sku;
+      titleMap[r.id] = r.variantTitle;
+    });
+    formData.append("skuMap", JSON.stringify(skuMap));
+    formData.append("titleMap", JSON.stringify(titleMap));
+
+    submit(formData, { method: "post" });
+  };
+
+  // Flatten variants to rows
+  const rows = [];
+  products.forEach((pEdge) => {
+    const p = pEdge.node;
+    p.variants.edges.forEach((vEdge) => {
+      const v = vEdge.node;
+      rows.push({
+        id: v.id,
+        productId: p.id,
+        productTitle: p.title,
+        variantTitle: v.title,
+        sku: v.sku,
+        price: v.price,
+        imageUrl: p.featuredImage?.url,
+        discount: discounts[v.id] !== undefined ? discounts[v.id] : "",
+      });
+    });
+  });
+
+  // CRITICAL DEBUG: Compare IDs
+  useEffect(() => {
+    if (rows.length > 0 && Object.keys(discounts).length > 0) {
+      console.log("DEBUG UI: Sample Row ID:", rows[0].id);
+      console.log("DEBUG UI: Sample Config ID:", Object.keys(discounts)[0]);
+      console.log("DEBUG UI: Match found for sample?", !!discounts[rows[0].id]);
+    }
+  }, [rows, discounts]);
+
+  if (!isHydrated) return null;
 
   return (
-    <s-page heading="Shopify app template">
-      <s-button slot="primary-action" onClick={generateProduct}>
-        Generate a product
+    <s-page heading="Automatic Discounts">
+      <s-button slot="primary-action" onClick={handleSave} loading={isLoading}>
+        Save Discounts
       </s-button>
 
-      <s-section heading="Congrats on creating a new Shopify app 🎉">
-        <s-paragraph>
-          This embedded app template uses{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/tools/app-bridge"
-            target="_blank"
-          >
-            App Bridge
-          </s-link>{" "}
-          interface examples like an{" "}
-          <s-link href="/app/additional">additional page in the app nav</s-link>
-          , as well as an{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            Admin GraphQL
-          </s-link>{" "}
-          mutation demo, to provide a starting point for app development.
-        </s-paragraph>
-      </s-section>
-      <s-section heading="Get started with products">
-        <s-paragraph>
-          Generate a product with GraphQL and get the JSON output for that
-          product. Learn more about the{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-            target="_blank"
-          >
-            productCreate
-          </s-link>{" "}
-          mutation in our API references.
-        </s-paragraph>
-        <s-stack direction="inline" gap="base">
-          <s-button
-            onClick={generateProduct}
-            {...(isLoading ? { loading: true } : {})}
-          >
-            Generate a product
-          </s-button>
-          {fetcher.data?.product && (
-            <s-button
-              onClick={() => {
-                shopify.intents.invoke?.("edit:shopify/Product", {
-                  value: fetcher.data?.product?.id,
-                });
-              }}
-              target="_blank"
-              variant="tertiary"
-            >
-              Edit product
-            </s-button>
-          )}
-        </s-stack>
-        {fetcher.data?.product && (
-          <s-section heading="productCreate mutation">
-            <s-stack direction="block" gap="base">
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.product, null, 2)}</code>
-                </pre>
-              </s-box>
-
-              <s-heading>productVariantsBulkUpdate mutation</s-heading>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.variant, null, 2)}</code>
-                </pre>
-              </s-box>
-            </s-stack>
-          </s-section>
+      <s-section>
+        {actionData?.status === "success" && (
+          <div className="banner-success">
+            <s-text>Discounts updated successfully!</s-text>
+          </div>
         )}
-      </s-section>
+        {actionData?.status === "error" && (
+          <div className="banner-error">
+            <div className="stack-block gap-small">
+              <s-text>Error saving discounts:</s-text>
+              {actionData.errors?.map((e, i) => (
+                <s-text key={i}>{e.message}</s-text>
+              ))}
+              {actionData.message && <s-text>{actionData.message}</s-text>}
+            </div>
+          </div>
+        )}
 
-      <s-section slot="aside" heading="App template specs">
-        <s-paragraph>
-          <s-text>Framework: </s-text>
-          <s-link href="https://reactrouter.com/" target="_blank">
-            React Router
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Interface: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/app-home/using-polaris-components"
-            target="_blank"
-          >
-            Polaris web components
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>API: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            GraphQL
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Database: </s-text>
-          <s-link href="https://www.prisma.io/" target="_blank">
-            Prisma
-          </s-link>
-        </s-paragraph>
-      </s-section>
+        <div className="discount-table-container">
+          <div className="stack-block gap-base">
+            {/* Table Header */}
+            <div className="p-small border-bottom">
+              <div className="flex-center gap-base">
+                <div className="col-product table-header-text"><s-text>Product</s-text></div>
+                <div className="col-variant table-header-text"><s-text>Variant</s-text></div>
+                <div className="col-price table-header-text"><s-text>Price</s-text></div>
+                <div className="col-discount table-header-text"><s-text>Discount (%)</s-text></div>
+              </div>
+            </div>
 
-      <s-section slot="aside" heading="Next steps">
-        <s-unordered-list>
-          <s-list-item>
-            Build an{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/getting-started/build-app-example"
-              target="_blank"
-            >
-              example app
-            </s-link>
-          </s-list-item>
-          <s-list-item>
-            Explore Shopify&apos;s API with{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-              target="_blank"
-            >
-              GraphiQL
-            </s-link>
-          </s-list-item>
-        </s-unordered-list>
+            {/* Table Rows */}
+            {rows.map((row) => (
+              <div key={row.id} className="p-small border-bottom">
+                <div className="flex-center gap-base">
+                  <div className="col-product">
+                    <div className="flex-center gap-small">
+                      {row.imageUrl && (
+                        <img
+                          src={row.imageUrl}
+                          alt={row.productTitle}
+                          className="product-variant-image"
+                        />
+                      )}
+                      <s-text>{row.productTitle}</s-text>
+                    </div>
+                  </div>
+                  <div className="col-variant"><s-text>{row.variantTitle}</s-text></div>
+                  <div className="col-price"><s-text>{row.price}</s-text></div>
+                  <div className="col-discount">
+                    <s-text-field
+                      value={row.discount.toString()}
+                      onInput={(e) => handleDiscountChange(row.id, e.target.value)}
+                    ></s-text-field>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {rows.length === 0 && (
+              <div className="p-base text-center">
+                <s-text>No products found.</s-text>
+              </div>
+            )}
+          </div>
+        </div>
       </s-section>
     </s-page>
   );
 }
-
-export const headers = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};

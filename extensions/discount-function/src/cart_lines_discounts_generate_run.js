@@ -9,80 +9,49 @@ export function cartLinesDiscountsGenerateRun(input) {
     throw new Error("No cart lines found");
   }
 
-  const { cartLinePercentage, orderPercentage, collectionIds } = parseMetafield(
+  const { variantDiscounts } = parseMetafield(
     input.discount.metafield,
   );
 
-  const hasOrderDiscountClass = input.discount.discountClasses.includes(
-    DiscountClass.Order,
-  );
-  const hasProductDiscountClass = input.discount.discountClasses.includes(
-    DiscountClass.Product,
-  );
-
-  if (!hasOrderDiscountClass && !hasProductDiscountClass) {
-    return { operations: [] };
-  }
-
   const operations = [];
-  // Add product discounts first if available and allowed
-  if (hasProductDiscountClass && cartLinePercentage > 0) {
-    const cartLineTargets = input.cart.lines.reduce((targets, line) => {
-      if (
-        "product" in line.merchandise &&
-        (line.merchandise.product.inAnyCollection || collectionIds.length === 0)
-      ) {
-        targets.push({
-          cartLine: {
-            id: line.id,
-          },
-        });
+
+  // Group lines by percentage
+  const linesByPercentage = new Map();
+
+  input.cart.lines.forEach((line) => {
+    if (line.merchandise.__typename === "ProductVariant") {
+      const variantId = line.merchandise.id;
+      const percentage = variantDiscounts[variantId];
+
+      if (percentage && percentage > 0) {
+        if (!linesByPercentage.has(percentage)) {
+          linesByPercentage.set(percentage, []);
+        }
+        linesByPercentage.get(percentage).push(line.id);
       }
-      return targets;
-    }, []);
-
-    if (cartLineTargets.length > 0) {
-      operations.push({
-        productDiscountsAdd: {
-          candidates: [
-            {
-              message: `${cartLinePercentage}% OFF PRODUCT`,
-              targets: cartLineTargets,
-              value: {
-                percentage: {
-                  value: cartLinePercentage,
-                },
-              },
-            },
-          ],
-          selectionStrategy: ProductDiscountSelectionStrategy.First,
-        },
-      });
     }
-  }
+  });
 
-  // Then add order discounts if available and allowed
-  if (hasOrderDiscountClass && orderPercentage > 0) {
+  // Create operations for each percentage group
+  for (const [percentage, lineIds] of linesByPercentage.entries()) {
     operations.push({
-      orderDiscountsAdd: {
+      productDiscountsAdd: {
         candidates: [
           {
-            message: `${orderPercentage}% OFF ORDER`,
-            targets: [
-              {
-                orderSubtotal: {
-                  excludedCartLineIds: [],
-                },
+            message: `${percentage}% OFF`,
+            targets: lineIds.map((id) => ({
+              cartLine: {
+                id: id,
               },
-            ],
+            })),
             value: {
               percentage: {
-                value: orderPercentage,
+                value: percentage,
               },
             },
           },
         ],
-        selectionStrategy: OrderDiscountSelectionStrategy.First,
+        selectionStrategy: ProductDiscountSelectionStrategy.First,
       },
     });
   }
@@ -94,16 +63,12 @@ function parseMetafield(metafield) {
   try {
     const value = JSON.parse(metafield.value);
     return {
-      cartLinePercentage: value.cartLinePercentage || 0,
-      orderPercentage: value.orderPercentage || 0,
-      collectionIds: value.collectionIds || [],
+      variantDiscounts: value.variantDiscounts || {},
     };
   } catch (error) {
     console.error("Error parsing metafield", error);
     return {
-      cartLinePercentage: 0,
-      orderPercentage: 0,
-      collectionIds: [],
+      variantDiscounts: {},
     };
   }
 }

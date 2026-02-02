@@ -1,0 +1,87 @@
+/* Discount App Styles */
+/* .discount-table-container {
+  margin-top: var(--s-space-base);
+  padding: var(--s-space-base);
+  border: var(--s-border-width-base) solid var(--s-color-border-default);
+  border-radius: var(--s-border-radius-base);
+  background: var(--s-color-background-surface);
+} */
+
+.product-variant-image {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.discount-input-field {
+  width: 100%;
+}
+
+.table-header-text {
+  font-weight: 600;
+}
+
+.col-product {
+  width: 40%;
+}
+
+.col-variant {
+  width: 25%;
+}
+
+.col-price {
+  width: 15%;
+}
+
+.col-discount {
+  width: 20%;
+}
+
+.border-bottom {
+  border-bottom: 1px solid var(--s-color-border-default, #e1e3e5);
+}
+
+.flex-center {
+  display: flex;
+  align-items: center;
+}
+
+.stack-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.gap-base {
+  gap: var(--s-space-base);
+}
+
+.gap-small {
+  gap: var(--s-space-small);
+}
+
+.banner-success {
+  padding: var(--s-space-base);
+  background: var(--s-color-background-surface-success);
+  border-radius: var(--s-border-radius-base);
+  margin-bottom: var(--s-space-base);
+}
+
+.banner-error {
+  padding: var(--s-space-base);
+  background: var(--s-color-background-surface-critical);
+  border-radius: var(--s-border-radius-base);
+  margin-bottom: var(--s-space-base);
+}
+
+.p-small {
+  padding: var(--s-space-small);
+}
+
+.p-base {
+  padding: var(--s-space-base);
+}
+
+.text-center {
+  text-align: center;
+}
