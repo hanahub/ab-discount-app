@@ -152,17 +152,35 @@ export const loader = async ({ request }) => {
   };
 };
 
-const syncVariantMetafields = async (admin, activeDiscounts) => {
+const syncVariantMetafields = async (admin, allVariantDiscounts) => {
   try {
-    const metafieldsToSet = Object.keys(activeDiscounts).map((variantId) => ({
-      ownerId: variantId,
-      namespace: "custom",
-      key: "smart_discount_value",
-      value: String(activeDiscounts[variantId]),
-      type: "number_decimal",
-    }));
+    const metafieldsToSet = [];
+    const metafieldsToDelete = [];
 
-    // Chunk into batches of 25 to be safe
+    // Determine which metafields to set (non-zero) and which to delete (zero or removed)
+    Object.keys(allVariantDiscounts).forEach((variantId) => {
+      const value = parseFloat(allVariantDiscounts[variantId]);
+
+      if (value > 0) {
+        // Set metafield for active discounts
+        metafieldsToSet.push({
+          ownerId: variantId,
+          namespace: "custom",
+          key: "smart_discount_value",
+          value: String(value),
+          type: "number_decimal",
+        });
+      } else {
+        // Delete metafield for zero/removed discounts
+        metafieldsToDelete.push({
+          ownerId: variantId,
+          namespace: "custom",
+          key: "smart_discount_value",
+        });
+      }
+    });
+
+    // Set active metafields in batches of 25
     for (let i = 0; i < metafieldsToSet.length; i += 25) {
       const batch = metafieldsToSet.slice(i, i + 25);
       if (batch.length === 0) continue;
@@ -183,7 +201,32 @@ const syncVariantMetafields = async (admin, activeDiscounts) => {
       );
       const json = await response.json();
       if (json.data?.metafieldsSet?.userErrors?.length > 0) {
-        console.error("Metafield Sync Error:", json.data.metafieldsSet.userErrors);
+        console.error("Metafield Set Error:", json.data.metafieldsSet.userErrors);
+      }
+    }
+
+    // Delete zero-value metafields in batches of 25
+    for (let i = 0; i < metafieldsToDelete.length; i += 25) {
+      const batch = metafieldsToDelete.slice(i, i + 25);
+      if (batch.length === 0) continue;
+
+      const response = await admin.graphql(
+        `#graphql
+          mutation metafieldsDelete($metafields: [MetafieldIdentifierInput!]!) {
+            metafieldsDelete(metafields: $metafields) {
+              userErrors {
+                field
+                message
+              }
+            }
+          }`,
+        {
+          variables: { metafields: batch },
+        }
+      );
+      const json = await response.json();
+      if (json.data?.metafieldsDelete?.userErrors?.length > 0) {
+        console.error("Metafield Delete Error:", json.data.metafieldsDelete.userErrors);
       }
     }
   } catch (e) {
@@ -280,7 +323,7 @@ export const action = async ({ request }) => {
 
   // Sync to Variant Metafields
   if (errors.length === 0) {
-    await syncVariantMetafields(admin, activeDiscounts);
+    await syncVariantMetafields(admin, variantDiscounts);
   }
 
   if (errors.length > 0) return { status: "error", errors };
