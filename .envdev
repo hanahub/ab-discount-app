@@ -1,0 +1,7 @@
+PRISMA_CLI_BINARY_TARGETS=native
+PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
+SHOPIFY_API_KEY=abb9f11c3ffb9ac4babe9c9f6a37b986
+# []=  # Not allowing to push
+SHOPIFY_APP_URL=https://ab-discount-app.onrender.com/
+SCOPES=read_products,write_products,write_discounts
+DATABASE_URL=file:./dev.sqlite
