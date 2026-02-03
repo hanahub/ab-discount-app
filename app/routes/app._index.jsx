@@ -9,7 +9,7 @@ export const loader = async ({ request }) => {
   // Fetch Products and Variants
   const productsQuery = `
     query {
-      products(first: 250) {
+      products(first: 250, sortKey: CREATED_AT, reverse: true) {
         edges {
           node {
             id
