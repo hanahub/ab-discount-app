@@ -315,6 +315,7 @@ export default function Discounts() {
       console.log("DEBUG UI: Sample Row ID:", rows[0].id);
       console.log("DEBUG UI: Sample Config ID:", Object.keys(discounts)[0]);
       console.log("DEBUG UI: Match found for sample?", !!discounts[rows[0].id]);
+      console.log("DEBUG UI: discounts", discounts);
     }
   }, [rows, discounts]);
 
