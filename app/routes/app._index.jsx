@@ -87,6 +87,7 @@ export const loader = async ({ request }) => {
 
   console.log("DEBUG: Functions Found:", JSON.stringify(functionsJson.data?.shopifyFunctions?.nodes));
   console.log("DEBUG: Discounts Found Rows:", discountsJson.data?.discountNodes?.nodes?.length);
+  console.log("DEBUG: Existing Discounts Raw:", JSON.stringify(discountsJson.data?.discountNodes?.nodes, null, 2));
 
   // Parse existing config
   let existingConfig = {};
