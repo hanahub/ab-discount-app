@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "f5ab3cb42f975f3f237f88a01c28a895"
+client_id = "abb9f11c3ffb9ac4babe9c9f6a37b986"
 name = "Smart Discount"
 application_url = "https://example.com"
 embedded = true

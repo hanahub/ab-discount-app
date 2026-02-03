@@ -96,8 +96,9 @@ export const loader = async ({ request }) => {
   const myFunctions = functionsJson.data?.shopifyFunctions?.nodes || [];
   const myFunction = myFunctions.find((f) =>
     f.title === "discount-function" ||
+    f.title.includes("discount-function") ||
     f.apiType === "cart_lines_discounts" ||
-    f.apiType?.includes("discount")
+    f.apiType === "PRODUCT_DISCOUNTS" // Fallback common types
   );
   const functionId = myFunction?.id;
 
@@ -323,6 +324,14 @@ export default function Discounts() {
       {banner?.type === "success" && (
         <div className="banner-success">
           Discounts updated successfully!
+        </div>
+      )}
+      {!functionId && (
+        <div className="banner-error">
+          <div className="stack-block gap-small">
+            <strong>CRITICAL: Shopify Function ID not found.</strong>
+            <div>Please ensure you have deployed the function using <code>npm run deploy</code> to the app with ID: {process.env.SHOPIFY_API_KEY}</div>
+          </div>
         </div>
       )}
       {banner?.type === "error" && (
