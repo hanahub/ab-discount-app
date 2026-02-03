@@ -152,6 +152,47 @@ export const loader = async ({ request }) => {
   };
 };
 
+const syncVariantMetafields = async (admin, activeDiscounts) => {
+  try {
+    const metafieldsToSet = Object.keys(activeDiscounts).map((variantId) => ({
+      ownerId: variantId,
+      namespace: "custom",
+      key: "smart_discount_value",
+      value: String(activeDiscounts[variantId]),
+      type: "number_decimal",
+    }));
+
+    // Chunk into batches of 25 to be safe
+    for (let i = 0; i < metafieldsToSet.length; i += 25) {
+      const batch = metafieldsToSet.slice(i, i + 25);
+      if (batch.length === 0) continue;
+
+      const response = await admin.graphql(
+        `#graphql
+          mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+            metafieldsSet(metafields: $metafields) {
+              userErrors {
+                field
+                message
+              }
+            }
+          }`,
+        {
+          variables: { metafields: batch },
+        }
+      );
+      const json = await response.json();
+      if (json.data?.metafieldsSet?.userErrors?.length > 0) {
+        console.error("Metafield Sync Error:", json.data.metafieldsSet.userErrors);
+      }
+    }
+  } catch (e) {
+    console.error("Failed to sync variant metafields:", e);
+    // Don't block the UI success if this background task fails partially
+  }
+};
+
+
 export const action = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -235,6 +276,11 @@ export const action = async ({ request }) => {
     }
   } catch (error) {
     errors.push({ message: error.message });
+  }
+
+  // Sync to Variant Metafields
+  if (errors.length === 0) {
+    await syncVariantMetafields(admin, activeDiscounts);
   }
 
   if (errors.length > 0) return { status: "error", errors };
