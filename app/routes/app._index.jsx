@@ -172,13 +172,14 @@ export const action = async ({ request }) => {
 
   const metafieldValue = JSON.stringify({ variantDiscounts: activeDiscounts });
   const metafield = {
-    namespace: "$app:smart-variant-discounts",
-    key: "function-configuration",
     value: metafieldValue,
     type: "json",
   };
   if (mainMetafieldId && mainMetafieldId !== "null") {
     metafield.id = mainMetafieldId;
+  } else {
+    metafield.namespace = "$app:smart-variant-discounts";
+    metafield.key = "function-configuration";
   }
 
   try {
