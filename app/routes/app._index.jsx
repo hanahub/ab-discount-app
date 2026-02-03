@@ -49,7 +49,7 @@ export const loader = async ({ request }) => {
   // Fetch Existing Automatic Discount Config (Broad query to find what's missing)
   const discountsQuery = `
     query {
-      discountNodes(first: 50) {
+      discountNodes(first: 50, query: "title:[Smart Discount]*") {
         nodes {
           id
           metafields(first: 10) {
