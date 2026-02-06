@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "f5ab3cb42f975f3f237f88a01c28a895"
+client_id = "7be0622a1ba7e0deea6c9c55ffd28da8"
 name = "Smart Discount"
-application_url = "https://example.com"
+application_url = "https://ab-discount-app.onrender.com"
 embedded = true
 
 [build]
@@ -24,4 +24,4 @@ api_version = "2026-01"
 scopes = "read_products,write_products,write_discounts"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://ab-discount-app.onrender.com" ]
