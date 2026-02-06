@@ -9,7 +9,7 @@ export const loader = async ({ request }) => {
   // Fetch Products and Variants
   const productsQuery = `
     query {
-      products(first: 250) {
+      products(first: 250, sortKey: CREATED_AT, reverse: true) {
         edges {
           node {
             id
@@ -49,7 +49,7 @@ export const loader = async ({ request }) => {
   // Fetch Existing Automatic Discount Config (Broad query to find what's missing)
   const discountsQuery = `
     query {
-      discountNodes(first: 50) {
+      discountNodes(first: 50, query: "title:[Smart Discount]*") {
         nodes {
           id
           metafields(first: 10) {
@@ -87,6 +87,7 @@ export const loader = async ({ request }) => {
 
   console.log("DEBUG: Functions Found:", JSON.stringify(functionsJson.data?.shopifyFunctions?.nodes));
   console.log("DEBUG: Discounts Found Rows:", discountsJson.data?.discountNodes?.nodes?.length);
+  console.log("DEBUG: Existing Discounts Raw:", JSON.stringify(discountsJson.data?.discountNodes?.nodes, null, 2));
 
   // Parse existing config
   let existingConfig = {};
@@ -96,8 +97,9 @@ export const loader = async ({ request }) => {
   const myFunctions = functionsJson.data?.shopifyFunctions?.nodes || [];
   const myFunction = myFunctions.find((f) =>
     f.title === "discount-function" ||
+    f.title.includes("discount-function") ||
     f.apiType === "cart_lines_discounts" ||
-    f.apiType?.includes("discount")
+    f.apiType === "PRODUCT_DISCOUNTS" // Fallback common types
   );
   const functionId = myFunction?.id;
 
@@ -150,6 +152,90 @@ export const loader = async ({ request }) => {
   };
 };
 
+const syncVariantMetafields = async (admin, allVariantDiscounts) => {
+  try {
+    const metafieldsToSet = [];
+    const metafieldsToDelete = [];
+
+    // Determine which metafields to set (non-zero) and which to delete (zero or removed)
+    Object.keys(allVariantDiscounts).forEach((variantId) => {
+      const value = parseFloat(allVariantDiscounts[variantId]);
+
+      if (value > 0) {
+        // Set metafield for active discounts
+        metafieldsToSet.push({
+          ownerId: variantId,
+          namespace: "custom",
+          key: "smart_discount_value",
+          value: String(value),
+          type: "number_decimal",
+        });
+      } else {
+        // Delete metafield for zero/removed discounts
+        metafieldsToDelete.push({
+          ownerId: variantId,
+          namespace: "custom",
+          key: "smart_discount_value",
+        });
+      }
+    });
+
+    // Set active metafields in batches of 25
+    for (let i = 0; i < metafieldsToSet.length; i += 25) {
+      const batch = metafieldsToSet.slice(i, i + 25);
+      if (batch.length === 0) continue;
+
+      const response = await admin.graphql(
+        `#graphql
+          mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+            metafieldsSet(metafields: $metafields) {
+              userErrors {
+                field
+                message
+              }
+            }
+          }`,
+        {
+          variables: { metafields: batch },
+        }
+      );
+      const json = await response.json();
+      if (json.data?.metafieldsSet?.userErrors?.length > 0) {
+        console.error("Metafield Set Error:", json.data.metafieldsSet.userErrors);
+      }
+    }
+
+    // Delete zero-value metafields in batches of 25
+    for (let i = 0; i < metafieldsToDelete.length; i += 25) {
+      const batch = metafieldsToDelete.slice(i, i + 25);
+      if (batch.length === 0) continue;
+
+      const response = await admin.graphql(
+        `#graphql
+          mutation metafieldsDelete($metafields: [MetafieldIdentifierInput!]!) {
+            metafieldsDelete(metafields: $metafields) {
+              userErrors {
+                field
+                message
+              }
+            }
+          }`,
+        {
+          variables: { metafields: batch },
+        }
+      );
+      const json = await response.json();
+      if (json.data?.metafieldsDelete?.userErrors?.length > 0) {
+        console.error("Metafield Delete Error:", json.data.metafieldsDelete.userErrors);
+      }
+    }
+  } catch (e) {
+    console.error("Failed to sync variant metafields:", e);
+    // Don't block the UI success if this background task fails partially
+  }
+};
+
+
 export const action = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -171,13 +257,14 @@ export const action = async ({ request }) => {
 
   const metafieldValue = JSON.stringify({ variantDiscounts: activeDiscounts });
   const metafield = {
-    namespace: "$app:smart-variant-discounts",
-    key: "function-configuration",
     value: metafieldValue,
     type: "json",
   };
   if (mainMetafieldId && mainMetafieldId !== "null") {
     metafield.id = mainMetafieldId;
+  } else {
+    metafield.namespace = "$app:smart-variant-discounts";
+    metafield.key = "function-configuration";
   }
 
   try {
@@ -232,6 +319,11 @@ export const action = async ({ request }) => {
     }
   } catch (error) {
     errors.push({ message: error.message });
+  }
+
+  // Sync to Variant Metafields
+  if (errors.length === 0) {
+    await syncVariantMetafields(admin, variantDiscounts);
   }
 
   if (errors.length > 0) return { status: "error", errors };
@@ -313,6 +405,7 @@ export default function Discounts() {
       console.log("DEBUG UI: Sample Row ID:", rows[0].id);
       console.log("DEBUG UI: Sample Config ID:", Object.keys(discounts)[0]);
       console.log("DEBUG UI: Match found for sample?", !!discounts[rows[0].id]);
+      console.log("DEBUG UI: discounts", discounts);
     }
   }, [rows, discounts]);
 
@@ -323,6 +416,14 @@ export default function Discounts() {
       {banner?.type === "success" && (
         <div className="banner-success">
           Discounts updated successfully!
+        </div>
+      )}
+      {!functionId && (
+        <div className="banner-error">
+          <div className="stack-block gap-small">
+            <strong>CRITICAL: Shopify Function ID not found.</strong>
+            <div>Please ensure you have deployed the function using <code>npm run deploy</code> to the app with ID: {process.env.SHOPIFY_API_KEY}</div>
+          </div>
         </div>
       )}
       {banner?.type === "error" && (
